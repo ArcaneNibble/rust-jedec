@@ -38,9 +38,7 @@ pub enum JedParserError {
 }
 
 #[cfg(std)]
-impl std::error::Error for JedParserError {
-
-}
+impl std::error::Error for JedParserError {}
 
 impl fmt::Display for JedParserError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -114,6 +112,8 @@ pub struct JEDECFile<'a> {
     pub design_spec: &'a [u8],
     /// Parsed N (Note) commands
     pub notes: Vec<&'a [u8]>,
+    /// Security `G` fuse
+    pub secure_fuse: Option<bool>,
 }
 
 fn trim_slice_start(mut in_: &[u8]) -> &[u8] {
@@ -193,7 +193,10 @@ impl<'a> JEDECFile<'a> {
         let mut fuses_written = bitvec![];
         let mut default_fuse = None;
         let mut vecs_alloced = false;
+
+        // storage for various fields that get captured
         let mut notes = Vec::new();
+        let mut secure_fuse = None;
 
         // Ready to parse each line
         let mut jed_fields = jed_body.split(|&c| c == b'*');
@@ -218,6 +221,15 @@ impl<'a> JEDECFile<'a> {
                     // Default state
                     let default_state_str = trim_slice(&l[1..]);
                     default_fuse = Some(match default_state_str {
+                        b"0" => false,
+                        b"1" => true,
+                        _ => return Err(JedParserError::InvalidCharacter),
+                    });
+                }
+                b'G' => {
+                    // Secure fuse
+                    let secure_fuse_str = trim_slice(&l[1..]);
+                    secure_fuse = Some(match secure_fuse_str {
                         b"0" => false,
                         b"1" => true,
                         _ => return Err(JedParserError::InvalidCharacter),
@@ -335,6 +347,7 @@ impl<'a> JEDECFile<'a> {
             footer,
             design_spec,
             notes,
+            secure_fuse,
         })
     }
 
@@ -549,5 +562,15 @@ mod tests {
         let ret = JEDECFile::from_bytes(b"\x02*QF2*L 0 0 1*\x030000", &ParseQuirks::new()).unwrap();
 
         assert_eq!(ret.f, bitvec![0, 1]);
+    }
+
+    #[test]
+    fn read_secure_fuse() {
+        let ret = JEDECFile::from_bytes(b"\x02*\x030000", &ParseQuirks::new()).unwrap();
+        assert_eq!(ret.secure_fuse, None);
+        let ret = JEDECFile::from_bytes(b"\x02*G0*\x030000", &ParseQuirks::new()).unwrap();
+        assert_eq!(ret.secure_fuse, Some(false));
+        let ret = JEDECFile::from_bytes(b"\x02*G1*\x030000", &ParseQuirks::new()).unwrap();
+        assert_eq!(ret.secure_fuse, Some(true));
     }
 }
