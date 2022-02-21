@@ -5,8 +5,10 @@ extern crate alloc;
 
 use bitvec::prelude::*;
 
+use alloc::vec;
+use alloc::vec::Vec;
 // use std::error;
-// use std::fmt;
+use core::fmt;
 // use std::io;
 // use std::io::Write;
 use core::num;
@@ -58,23 +60,25 @@ pub enum JedParserError {
 //     }
 // }
 
-// impl fmt::Display for JedParserError {
-//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-//         match self {
-//             &JedParserError::MissingSTX => write!(f, "STX not found"),
-//             &JedParserError::MissingETX => write!(f, "ETX not found"),
-//             &JedParserError::InvalidUtf8(err) => write!(f, "invalid utf8 character: {}", err),
-//             &JedParserError::InvalidCharacter => write!(f, "invalid character in field"),
-//             &JedParserError::UnexpectedEnd => write!(f, "unexpected end of file"),
-//             &JedParserError::BadFileChecksum => write!(f, "invalid file checksum"),
-//             &JedParserError::BadFuseChecksum => write!(f, "invalid fuse checksum"),
-//             &JedParserError::InvalidFuseIndex => write!(f, "invalid fuse index value"),
-//             &JedParserError::MissingQF => write!(f, "missing QF field"),
-//             &JedParserError::MissingF => write!(f, "missing F field"),
-//             &JedParserError::UnrecognizedField => write!(f, "unrecognized field"),
-//         }
-//     }
-// }
+impl fmt::Display for JedParserError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            &JedParserError::MissingSTX => write!(f, "STX not found"),
+            &JedParserError::MissingETX => write!(f, "ETX not found"),
+            &JedParserError::InvalidNonASCIICharacter(err) => {
+                write!(f, "invalid utf8 character: {}", err)
+            }
+            &JedParserError::InvalidCharacter => write!(f, "invalid character in field"),
+            &JedParserError::UnexpectedEnd => write!(f, "unexpected end of file"),
+            &JedParserError::BadFileChecksum => write!(f, "invalid file checksum"),
+            &JedParserError::BadFuseChecksum => write!(f, "invalid fuse checksum"),
+            &JedParserError::InvalidFuseIndex => write!(f, "invalid fuse index value"),
+            &JedParserError::MissingQF => write!(f, "missing QF field"),
+            &JedParserError::MissingF => write!(f, "missing F field"),
+            &JedParserError::UnrecognizedField => write!(f, "unrecognized field"),
+        }
+    }
+}
 
 impl From<str::Utf8Error> for JedParserError {
     fn from(err: str::Utf8Error) -> Self {
@@ -88,28 +92,23 @@ impl From<num::ParseIntError> for JedParserError {
     }
 }
 
-// #[derive(Eq, PartialEq, Copy, Clone)]
-// enum Ternary {
-//     Zero,
-//     One,
-//     Undef,
-// }
-
 const STX: u8 = 0x02;
 const ETX: u8 = 0x03;
 
 /// Struct representing a JEDEC programming file
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct JEDECFile {
+pub struct JEDECFile<'a> {
     /// Fuse array
     pub f: BitVec,
+    /// Parsed N (Note) commands
+    pub notes: Vec<&'a str>,
     // /// Possibly contains a device name
     // pub dev_name_str: Option<String>,
 }
 
-impl JEDECFile {
+impl<'a> JEDECFile<'a> {
     /// Reads a .jed file
-    pub fn from_bytes(in_bytes: &[u8]) -> Result<Self, JedParserError> {
+    pub fn from_bytes(in_bytes: &'a [u8]) -> Result<Self, JedParserError> {
         //         let mut device = None;
         //         let mut default_fuse = Ternary::Undef;
 
@@ -153,6 +152,7 @@ impl JEDECFile {
         let mut fuses_written = bitvec![];
         let mut default_fuse = None;
         let mut vecs_alloced = false;
+        let mut notes = Vec::new();
 
         // Ready to parse each line
         for l in jed_body.split('*') {
@@ -180,13 +180,10 @@ impl JEDECFile {
                         _ => return Err(JedParserError::InvalidCharacter),
                     });
                 }
-                //                 'N' => {
-                //                     // Notes; we want to extract N DEVICE but otherwise ignore it
-                //                     let note_pieces = l.split(|c| c == ' ' || c == '\r' || c == '\n').collect::<Vec<_>>();
-                //                     if note_pieces.len() == 3 && note_pieces[1] == "DEVICE" {
-                //                         device = Some(note_pieces[2].to_owned());
-                //                     }
-                //                 },
+                'N' => {
+                    // Notes
+                    notes.push(l);
+                }
                 'Q' => {
                     // Look for QF
                     if l.starts_with("QF") {
@@ -285,83 +282,73 @@ impl JEDECFile {
             }
         }
 
-        Ok(Self {
-            f: fuses,
-            //             dev_name_str: device
-        })
+        Ok(Self { f: fuses, notes })
+    }
+
+    //     /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks are
+    //     /// inserted _before_ the given fuse numbers in the iterator.
+    //     pub fn write_custom_linebreaks<W, I>(&self, mut writer: W, linebreaks: I) -> Result<(), io::Error>
+    //         where W: Write, I: Iterator<Item = usize> {
+
+    //         // FIXME: Un-hardcode the number of 0s in the fuse index
+
+    //         write!(writer, "\x02")?;
+
+    //         write!(writer, "QF{}*\n", self.f.len())?;
+    //         if let Some(ref dev_name_str) = self.dev_name_str {
+    //             write!(writer, "N DEVICE {}*\n", dev_name_str)?;
+    //         }
+    //         write!(writer, "\n")?;
+
+    //         let mut next_written_fuse = 0;
+    //         for linebreak in linebreaks {
+    //             // Write one line
+    //             if next_written_fuse == linebreak {
+    //                 // One or more duplicate breaks.
+    //                 write!(writer, "\n")?;
+    //             } else {
+    //                 write!(writer, "L{:06} ", next_written_fuse)?;
+    //                 for i in next_written_fuse..linebreak {
+    //                     write!(writer, "{}", if self.f[i] {"1"} else {"0"})?;
+    //                 }
+    //                 write!(writer, "*\n")?;
+    //                 next_written_fuse = linebreak;
+    //             }
+    //         }
+
+    //         // Last chunk
+    //         if next_written_fuse < self.f.len() {
+    //             write!(writer, "L{:06} ", next_written_fuse)?;
+    //             for i in next_written_fuse..self.f.len() {
+    //                 write!(writer, "{}", if self.f[i] {"1"} else {"0"})?;
+    //             }
+    //             write!(writer, "*\n")?;
+    //         }
+
+    //         write!(writer, "\x030000\n")?;
+
+    //         Ok(())
+    //     }
+
+    //     /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks
+    //     /// happen every `break_inverval` fuses.
+    //     pub fn write_with_linebreaks<W>(&self, writer: W, break_inverval: usize) -> Result<(), io::Error> where W: Write {
+    //         self.write_custom_linebreaks(writer, (0..self.f.len()).step_by(break_inverval).skip(1))
+    //     }
+
+    //     /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks
+    //     /// default to once every 16 fuses.
+    //     pub fn write<W>(&self, writer: W) -> Result<(), io::Error> where W: Write {
+    //         self.write_with_linebreaks(writer, 16)
+    //     }
+
+    /// Constructs a fuse array with the given number of fuses
+    pub fn new(size: usize) -> Self {
+        let f = BitVec::repeat(false, size);
+
+        Self { f, notes: vec![] }
     }
 }
-
-//     /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks are
-//     /// inserted _before_ the given fuse numbers in the iterator.
-//     pub fn write_custom_linebreaks<W, I>(&self, mut writer: W, linebreaks: I) -> Result<(), io::Error>
-//         where W: Write, I: Iterator<Item = usize> {
-
-//         // FIXME: Un-hardcode the number of 0s in the fuse index
-
-//         write!(writer, "\x02")?;
-
-//         write!(writer, "QF{}*\n", self.f.len())?;
-//         if let Some(ref dev_name_str) = self.dev_name_str {
-//             write!(writer, "N DEVICE {}*\n", dev_name_str)?;
-//         }
-//         write!(writer, "\n")?;
-
-//         let mut next_written_fuse = 0;
-//         for linebreak in linebreaks {
-//             // Write one line
-//             if next_written_fuse == linebreak {
-//                 // One or more duplicate breaks.
-//                 write!(writer, "\n")?;
-//             } else {
-//                 write!(writer, "L{:06} ", next_written_fuse)?;
-//                 for i in next_written_fuse..linebreak {
-//                     write!(writer, "{}", if self.f[i] {"1"} else {"0"})?;
-//                 }
-//                 write!(writer, "*\n")?;
-//                 next_written_fuse = linebreak;
-//             }
-//         }
-
-//         // Last chunk
-//         if next_written_fuse < self.f.len() {
-//             write!(writer, "L{:06} ", next_written_fuse)?;
-//             for i in next_written_fuse..self.f.len() {
-//                 write!(writer, "{}", if self.f[i] {"1"} else {"0"})?;
-//             }
-//             write!(writer, "*\n")?;
-//         }
-
-//         write!(writer, "\x030000\n")?;
-
-//         Ok(())
-//     }
-
-//     /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks
-//     /// happen every `break_inverval` fuses.
-//     pub fn write_with_linebreaks<W>(&self, writer: W, break_inverval: usize) -> Result<(), io::Error> where W: Write {
-//         self.write_custom_linebreaks(writer, (0..self.f.len()).step_by(break_inverval).skip(1))
-//     }
-
-//     /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks
-//     /// default to once every 16 fuses.
-//     pub fn write<W>(&self, writer: W) -> Result<(), io::Error> where W: Write {
-//         self.write_with_linebreaks(writer, 16)
-//     }
-
-//     /// Constructs a fuse array with the given number of fuses
-//     pub fn new(size: usize) -> Self {
-//         let mut f = Vec::with_capacity(size);
-//         for _ in 0..size {
-//             f.push(false);
-//         }
-
-//         Self {
-//             f,
-//             dev_name_str: None,
-//         }
-//     }
-// }
 
 #[cfg(test)]
 mod tests {
@@ -419,7 +406,7 @@ mod tests {
             ret,
             Ok(JEDECFile {
                 f: bitvec![],
-                // dev_name_str: None
+                notes: vec![],
             })
         );
     }
@@ -431,16 +418,18 @@ mod tests {
         assert_eq!(ret, Err(JedParserError::InvalidCharacter));
     }
 
-    //     #[test]
-    //     fn read_empty_with_device() {
-    //         let ret = JEDECFile::from_bytes(b"\x02F0*N DEVICE asdf*\x030000");
+    #[test]
+    fn read_empty_with_device() {
+        let ret = JEDECFile::from_bytes(b"\x02F0*N DEVICE asdf*\x030000");
 
-    //         assert_eq!(ret, Ok(JEDECFile {
-    //             f: vec![],
-    //             dev_name_str: Some(String::from("asdf"))
-
-    //         }));
-    //     }
+        assert_eq!(
+            ret,
+            Ok(JEDECFile {
+                f: bitvec![],
+                notes: vec!["N DEVICE asdf"]
+            })
+        );
+    }
 
     #[test]
     fn read_l_without_qf() {
@@ -457,7 +446,7 @@ mod tests {
             ret,
             Ok(JEDECFile {
                 f: bitvec![1],
-                // dev_name_str: None
+                notes: vec![],
             })
         );
     }
@@ -470,7 +459,7 @@ mod tests {
             ret,
             Ok(JEDECFile {
                 f: bitvec![1],
-                // dev_name_str: None
+                notes: vec![],
             })
         );
     }
@@ -490,7 +479,7 @@ mod tests {
             ret,
             Ok(JEDECFile {
                 f: bitvec![0, 1],
-                // dev_name_str: None
+                notes: vec![],
             })
         );
     }
