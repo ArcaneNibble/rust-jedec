@@ -1,6 +1,6 @@
 [package]
 name = "jedec"
-version = "0.0.4"
+version = "0.1.0"
 authors = ["R <rqou@berkeley.edu>"]
 license = "0BSD"
 description = "A library for working with JEDEC programming files"
@@ -15,3 +15,8 @@ lto = true
 [lib]
 name = "jedec"
 crate-type = ["rlib"]
+
+[dependencies.bitvec]
+version = "1"
+default-features = false
+features = ["alloc"]
