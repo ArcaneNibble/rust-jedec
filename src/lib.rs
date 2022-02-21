@@ -94,23 +94,84 @@ impl From<num::ParseIntError> for JedParserError {
 const STX: u8 = 0x02;
 const ETX: u8 = 0x03;
 
+/// Struct representing parsing quirk options
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct ParseQuirks {
+    no_design_spec: bool,
+}
+
+impl ParseQuirks {
+    /// Construct a new object with default quirk settings
+    pub fn new() -> Self {
+        Self {
+            no_design_spec: false,
+        }
+    }
+
+    /// Xilinx is known to output JEDEC files that do not contain a
+    /// design specification block
+    pub fn no_design_spec(mut self, no_design_spec: bool) -> Self {
+        self.no_design_spec = no_design_spec;
+        self
+    }
+}
+
+impl Default for ParseQuirks {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Struct representing a JEDEC programming file
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct JEDECFile<'a> {
     /// Fuse array
     pub f: BitVec,
+    /// Data that appears before the STX byte
+    pub header: &'a [u8],
+    /// Data that appears after the ETX byte
+    pub footer: &'a [u8],
+    /// Design specification field
+    pub design_spec: &'a [u8],
     /// Parsed N (Note) commands
-    pub notes: Vec<&'a str>,
-    // /// Possibly contains a device name
-    // pub dev_name_str: Option<String>,
+    pub notes: Vec<&'a [u8]>,
+}
+
+fn trim_slice_start(mut in_: &[u8]) -> &[u8] {
+    while in_.len() > 0 {
+        match in_[0] {
+            b' ' | b'\r' | b'\n' => {
+                in_ = &in_[1..];
+            }
+            _ => {
+                break;
+            }
+        }
+    }
+    in_
+}
+
+fn trim_slice_end(mut in_: &[u8]) -> &[u8] {
+    while in_.len() > 0 {
+        match in_[in_.len() - 1] {
+            b' ' | b'\r' | b'\n' => {
+                in_ = &in_[..in_.len() - 1];
+            }
+            _ => {
+                break;
+            }
+        }
+    }
+    in_
+}
+
+fn trim_slice(in_: &[u8]) -> &[u8] {
+    trim_slice_end(trim_slice_start(in_))
 }
 
 impl<'a> JEDECFile<'a> {
     /// Reads a .jed file
-    pub fn from_bytes(in_bytes: &'a [u8]) -> Result<Self, JedParserError> {
-        //         let mut device = None;
-        //         let mut default_fuse = Ternary::Undef;
-
+    pub fn from_bytes(in_bytes: &'a [u8], quirks: &ParseQuirks) -> Result<Self, JedParserError> {
         // Find STX
         let jed_stx = in_bytes
             .iter()
@@ -141,8 +202,13 @@ impl<'a> JEDECFile<'a> {
             return Err(JedParserError::BadFileChecksum);
         }
 
-        // Make a str object out of the body
-        let jed_body = str::from_utf8(&in_bytes[jed_stx + 1..jed_etx])?;
+        // // Make a str object out of the body
+        // let jed_body = str::from_utf8(&in_bytes[jed_stx + 1..jed_etx])?;
+
+        // slice out header/footer/body
+        let header = &in_bytes[..jed_stx];
+        let jed_body = &in_bytes[jed_stx + 1..jed_etx];
+        let footer = &in_bytes[jed_etx + 5..];
 
         // state
         let mut fuse_expected_csum = None;
@@ -154,8 +220,16 @@ impl<'a> JEDECFile<'a> {
         let mut notes = Vec::new();
 
         // Ready to parse each line
-        for l in jed_body.split('*') {
-            let l = l.trim_matches(|c| c == ' ' || c == '\r' || c == '\n');
+        let mut jed_fields = jed_body.split(|&c| c == b'*');
+
+        let design_spec = if quirks.no_design_spec {
+            &[]
+        } else {
+            jed_fields.next().unwrap_or(&[])
+        };
+
+        for l in jed_fields {
+            let l = trim_slice_start(l);
             if l.len() == 0 {
                 // FIXME: Should we do something else here?
                 // ignore empty fields
@@ -163,34 +237,35 @@ impl<'a> JEDECFile<'a> {
             }
 
             // Now we can look at the first byte to figure out what we have
-            match l.chars().next().unwrap() {
-                'J' => {}                                           // TODO: "Official" device type
-                'G' => {}                                           // TODO: Security fuse
-                'B' | 'I' | 'K' | 'M' | 'O' | 'W' | 'Y' | 'Z' => {} // Explicitly reserved in spec, ignore
-                'D' => {}                                           // Obsolete
-                'E' | 'U' => {} // TODO: Extra fuses, unsupported for now
-                'X' | 'V' | 'P' | 'S' | 'R' | 'T' | 'A' => {} // Testing-related, no intent to support for now
-                'F' => {
+            match l[0] {
+                b'J' => {}                                                  // TODO: "Official" device type
+                b'G' => {}                                                  // TODO: Security fuse
+                b'B' | b'I' | b'K' | b'M' | b'O' | b'W' | b'Y' | b'Z' => {} // Explicitly reserved in spec, ignore
+                b'D' => {}                                                  // Obsolete
+                b'E' | b'U' => {} // TODO: Extra fuses, unsupported for now
+                b'X' | b'V' | b'P' | b'S' | b'R' | b'T' | b'A' => {} // Testing-related, no intent to support for now
+                b'F' => {
                     // Default state
-                    let (_, default_state_str) = l.split_at(1);
+                    let default_state_str = trim_slice(&l[1..]);
                     default_fuse = Some(match default_state_str {
-                        "0" => false,
-                        "1" => true,
+                        b"0" => false,
+                        b"1" => true,
                         _ => return Err(JedParserError::InvalidCharacter),
                     });
                 }
-                'N' => {
+                b'N' => {
                     // Notes
-                    notes.push(l);
+                    notes.push(&l[1..]);
                 }
-                'Q' => {
+                b'Q' => {
                     // Look for QF
-                    if l.starts_with("QF") {
-                        let (_, num_fuses_str) = l.split_at(2);
+                    if &l[0..2] == b"QF" {
+                        let num_fuses_str = trim_slice(&l[2..]);
+                        let num_fuses_str = str::from_utf8(num_fuses_str)?;
                         num_fuses = usize::from_str_radix(num_fuses_str, 10)?;
                     }
                 }
-                'L' => {
+                b'L' => {
                     // A set of fuses
                     if num_fuses == 0 {
                         return Err(JedParserError::MissingQF);
@@ -206,20 +281,20 @@ impl<'a> JEDECFile<'a> {
                         vecs_alloced = true;
                     }
 
-                    let mut fuse_field_splitter =
-                        l.splitn(2, |c| c == ' ' || c == '\r' || c == '\n');
-                    let fuse_idx_str = fuse_field_splitter.next();
-                    let (_, fuse_idx_str) = fuse_idx_str.unwrap().split_at(1);
+                    // l is something like "L012345 1010101"
+                    let fuse_data = trim_slice(&l[1..]);
+
+                    let mut fuse_split =
+                        fuse_data.splitn(2, |&c| c == b' ' || c == b'\r' || c == b'\n');
+
+                    let fuse_idx_str = fuse_split.next().unwrap();
+                    let fuse_idx_str = str::from_utf8(fuse_idx_str)?;
                     let mut fuse_idx = usize::from_str_radix(fuse_idx_str, 10)?;
 
-                    let fuse_bits_part = fuse_field_splitter.next();
-                    if fuse_bits_part.is_none() {
-                        return Err(JedParserError::InvalidFuseIndex);
-                    }
-                    let fuse_bits_part = fuse_bits_part.unwrap();
-                    for fuse in fuse_bits_part.chars() {
-                        match fuse {
-                            '0' => {
+                    let fuse_bits = fuse_split.next().ok_or(JedParserError::InvalidFuseIndex)?;
+                    for fusec in fuse_bits {
+                        match &fusec {
+                            b'0' => {
                                 if fuse_idx >= num_fuses {
                                     return Err(JedParserError::InvalidFuseIndex);
                                 }
@@ -229,7 +304,7 @@ impl<'a> JEDECFile<'a> {
                                 }
                                 fuse_idx += 1;
                             }
-                            '1' => {
+                            b'1' => {
                                 if fuse_idx >= num_fuses {
                                     return Err(JedParserError::InvalidFuseIndex);
                                 }
@@ -239,17 +314,18 @@ impl<'a> JEDECFile<'a> {
                                 }
                                 fuse_idx += 1;
                             }
-                            ' ' | '\r' | '\n' => {} // Do nothing
+                            b' ' | b'\r' | b'\n' => {} // Do nothing
                             _ => return Err(JedParserError::InvalidCharacter),
                         }
                     }
                 }
-                'C' => {
+                b'C' => {
                     // Checksum
-                    let (_, csum_str) = l.split_at(1);
+                    let csum_str = trim_slice(&l[1..]);
                     if csum_str.len() != 4 {
                         return Err(JedParserError::BadFuseChecksum);
                     }
+                    let csum_str = str::from_utf8(csum_str)?;
                     fuse_expected_csum = Some(u16::from_str_radix(csum_str, 16)?);
                 }
                 _ => return Err(JedParserError::UnrecognizedField),
@@ -281,7 +357,13 @@ impl<'a> JEDECFile<'a> {
             }
         }
 
-        Ok(Self { f: fuses, notes })
+        Ok(Self {
+            f: fuses,
+            header,
+            footer,
+            design_spec,
+            notes,
+        })
     }
 
     /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks are
@@ -349,12 +431,12 @@ impl<'a> JEDECFile<'a> {
         self.write_with_linebreaks(writer, 16)
     }
 
-    /// Constructs a fuse array with the given number of fuses
-    pub fn new(size: usize) -> Self {
-        let f = BitVec::repeat(false, size);
+    // /// Constructs a fuse array with the given number of fuses
+    // pub fn new(size: usize) -> Self {
+    //     let f = BitVec::repeat(false, size);
 
-        Self { f, notes: vec![] }
-    }
+    //     Self { f, notes: vec![] }
+    // }
 }
 
 #[cfg(test)]
@@ -363,131 +445,137 @@ mod tests {
 
     #[test]
     fn read_no_stx() {
-        let ret = JEDECFile::from_bytes(b"asdf");
+        let ret = JEDECFile::from_bytes(b"asdf", &ParseQuirks::new());
 
         assert_eq!(ret, Err(JedParserError::MissingSTX));
     }
 
     #[test]
     fn read_no_etx() {
-        let ret = JEDECFile::from_bytes(b"asdf\x02fdsa");
+        let ret = JEDECFile::from_bytes(b"asdf\x02fdsa", &ParseQuirks::new());
 
         assert_eq!(ret, Err(JedParserError::MissingETX));
     }
 
     #[test]
     fn read_no_csum() {
-        let ret = JEDECFile::from_bytes(b"asdf\x02fdsa\x03");
+        let ret = JEDECFile::from_bytes(b"asdf\x02fdsa\x03", &ParseQuirks::new());
         assert_eq!(ret, Err(JedParserError::UnexpectedEnd));
 
-        let ret = JEDECFile::from_bytes(b"asdf\x02fdsa\x03AAA");
+        let ret = JEDECFile::from_bytes(b"asdf\x02fdsa\x03AAA", &ParseQuirks::new());
         assert_eq!(ret, Err(JedParserError::UnexpectedEnd));
     }
 
     #[test]
     fn read_bad_csum() {
-        let ret = JEDECFile::from_bytes(b"asdf\x02fdsa\x03AAAA");
+        let ret = JEDECFile::from_bytes(b"asdf\x02fdsa\x03AAAA", &ParseQuirks::new());
 
         assert_eq!(ret, Err(JedParserError::BadFileChecksum));
     }
 
     #[test]
     fn read_malformed_csum() {
-        let ret = JEDECFile::from_bytes(b"asdf\x02fdsa\x03AAAZ");
+        let ret = JEDECFile::from_bytes(b"asdf\x02fdsa\x03AAAZ", &ParseQuirks::new());
 
         assert_eq!(ret, Err(JedParserError::InvalidCharacter));
     }
 
     #[test]
     fn read_no_f() {
-        let ret = JEDECFile::from_bytes(b"\x02QF1*\x030000");
+        let ret = JEDECFile::from_bytes(b"\x02*QF1*\x030000", &ParseQuirks::new());
 
         assert_eq!(ret, Err(JedParserError::MissingF));
     }
 
     #[test]
     fn read_empty_no_fuses() {
-        let ret = JEDECFile::from_bytes(b"\x02F0*\x030000");
+        let ret = JEDECFile::from_bytes(b"\x02\x030000", &ParseQuirks::new()).unwrap();
 
-        assert_eq!(
-            ret,
-            Ok(JEDECFile {
-                f: bitvec![],
-                notes: vec![],
-            })
-        );
+        assert_eq!(ret.f, bitvec![]);
+    }
+
+    #[test]
+    fn read_header_trailer() {
+        let ret =
+            JEDECFile::from_bytes(b"asdf\nfdsa\x02\x030000zzzzzz", &ParseQuirks::new()).unwrap();
+
+        assert_eq!(ret.header, b"asdf\nfdsa");
+        assert_eq!(ret.footer, b"zzzzzz");
+    }
+
+    #[test]
+    fn read_design_spec() {
+        let ret =
+            JEDECFile::from_bytes(b"\x02hello world!\n*\x030000", &ParseQuirks::new()).unwrap();
+
+        assert_eq!(ret.design_spec, b"hello world!\n");
     }
 
     #[test]
     fn read_bogus_f_command() {
-        let ret = JEDECFile::from_bytes(b"\x02F2*\x030000");
+        let ret = JEDECFile::from_bytes(b"\x02*F2*\x030000", &ParseQuirks::new());
 
         assert_eq!(ret, Err(JedParserError::InvalidCharacter));
     }
 
     #[test]
-    fn read_empty_with_device() {
-        let ret = JEDECFile::from_bytes(b"\x02F0*N DEVICE asdf*\x030000");
+    fn read_notes() {
+        let ret = JEDECFile::from_bytes(
+            b"\x02*Note test1*  N DEVICE asdf*  Note 3 \r  \x030000",
+            &ParseQuirks::new(),
+        )
+        .unwrap();
 
         assert_eq!(
-            ret,
-            Ok(JEDECFile {
-                f: bitvec![],
-                notes: vec!["N DEVICE asdf"]
-            })
+            ret.notes,
+            vec![b"ote test1".as_slice(), b" DEVICE asdf", b"ote 3 \r  "]
         );
     }
 
     #[test]
     fn read_l_without_qf() {
-        let ret = JEDECFile::from_bytes(b"\x02F0*L0 0*\x030000");
+        let ret = JEDECFile::from_bytes(b"\x02*L0 0*\x030000", &ParseQuirks::new());
 
         assert_eq!(ret, Err(JedParserError::MissingQF));
     }
 
     #[test]
     fn read_one_fuse() {
-        let ret = JEDECFile::from_bytes(b"\x02F0*QF1*L0 1*\x030000");
+        let ret = JEDECFile::from_bytes(b"\x02*QF1*L0 1*\x030000", &ParseQuirks::new()).unwrap();
 
-        assert_eq!(
-            ret,
-            Ok(JEDECFile {
-                f: bitvec![1],
-                notes: vec![],
-            })
-        );
+        assert_eq!(ret.f, bitvec![1]);
+    }
+
+    #[test]
+    fn read_no_spec_quirk() {
+        let ret = JEDECFile::from_bytes(
+            b"\x02QF69420*QF1*L0 1*\x030000",
+            &ParseQuirks::new().no_design_spec(true),
+        )
+        .unwrap();
+
+        assert_eq!(ret.f, bitvec![1]);
     }
 
     #[test]
     fn read_one_fuse_csum_good() {
-        let ret = JEDECFile::from_bytes(b"\x02F0*QF1*L0 1*C0001*\x030000");
+        let ret =
+            JEDECFile::from_bytes(b"\x02*QF1*L0 1*C0001*\x030000", &ParseQuirks::new()).unwrap();
 
-        assert_eq!(
-            ret,
-            Ok(JEDECFile {
-                f: bitvec![1],
-                notes: vec![],
-            })
-        );
+        assert_eq!(ret.f, bitvec![1]);
     }
 
     #[test]
     fn read_one_fuse_csum_bad() {
-        let ret = JEDECFile::from_bytes(b"\x02F0*QF1*L0 1*C0002*\x030000");
+        let ret = JEDECFile::from_bytes(b"\x02*QF1*L0 1*C0002*\x030000", &ParseQuirks::new());
 
         assert_eq!(ret, Err(JedParserError::BadFuseChecksum));
     }
 
     #[test]
     fn read_two_fuses_space() {
-        let ret = JEDECFile::from_bytes(b"\x02F0*QF2*L0 0 1*\x030000");
+        let ret = JEDECFile::from_bytes(b"\x02*QF2*L 0 0 1*\x030000", &ParseQuirks::new()).unwrap();
 
-        assert_eq!(
-            ret,
-            Ok(JEDECFile {
-                f: bitvec![0, 1],
-                notes: vec![],
-            })
-        );
+        assert_eq!(ret.f, bitvec![0, 1]);
     }
 }
