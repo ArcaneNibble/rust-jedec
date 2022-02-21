@@ -16,6 +16,10 @@ lto = true
 name = "jedec"
 crate-type = ["rlib"]
 
+[features]
+std = []
+default = ["std"]
+
 [dependencies.bitvec]
 version = "1"
 default-features = false

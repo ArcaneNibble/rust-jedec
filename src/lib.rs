@@ -7,11 +7,8 @@ use bitvec::prelude::*;
 
 use alloc::vec;
 use alloc::vec::Vec;
-// use std::error;
 use core::fmt;
 use core::fmt::Write;
-// use std::io;
-// use std::io::Write;
 use core::num;
 use core::num::Wrapping;
 use core::str;
@@ -43,23 +40,24 @@ pub enum JedParserError {
     UnrecognizedField,
 }
 
-// impl error::Error for JedParserError {
-//     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-//         match self {
-//             &JedParserError::MissingSTX => None,
-//             &JedParserError::MissingETX => None,
-//             &JedParserError::InvalidUtf8(ref err) => Some(err),
-//             &JedParserError::InvalidCharacter => None,
-//             &JedParserError::UnexpectedEnd => None,
-//             &JedParserError::BadFileChecksum => None,
-//             &JedParserError::BadFuseChecksum => None,
-//             &JedParserError::InvalidFuseIndex => None,
-//             &JedParserError::MissingQF => None,
-//             &JedParserError::MissingF => None,
-//             &JedParserError::UnrecognizedField => None,
-//         }
-//     }
-// }
+#[cfg(std)]
+impl std::error::Error for JedParserError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            &JedParserError::MissingSTX => None,
+            &JedParserError::MissingETX => None,
+            &JedParserError::InvalidUtf8(ref err) => Some(err),
+            &JedParserError::InvalidCharacter => None,
+            &JedParserError::UnexpectedEnd => None,
+            &JedParserError::BadFileChecksum => None,
+            &JedParserError::BadFuseChecksum => None,
+            &JedParserError::InvalidFuseIndex => None,
+            &JedParserError::MissingQF => None,
+            &JedParserError::MissingF => None,
+            &JedParserError::UnrecognizedField => None,
+        }
+    }
+}
 
 impl fmt::Display for JedParserError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
