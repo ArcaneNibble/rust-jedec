@@ -9,6 +9,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 // use std::error;
 use core::fmt;
+use core::fmt::Write;
 // use std::io;
 // use std::io::Write;
 use core::num;
@@ -285,62 +286,70 @@ impl<'a> JEDECFile<'a> {
         Ok(Self { f: fuses, notes })
     }
 
-    //     /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks are
-    //     /// inserted _before_ the given fuse numbers in the iterator.
-    //     pub fn write_custom_linebreaks<W, I>(&self, mut writer: W, linebreaks: I) -> Result<(), io::Error>
-    //         where W: Write, I: Iterator<Item = usize> {
+    /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks are
+    /// inserted _before_ the given fuse numbers in the iterator.
+    pub fn write_custom_linebreaks<W, I>(&self, mut writer: W, linebreaks: I) -> fmt::Result
+    where
+        W: Write,
+        I: Iterator<Item = usize>,
+    {
+        // FIXME: Un-hardcode the number of 0s in the fuse index
 
-    //         // FIXME: Un-hardcode the number of 0s in the fuse index
+        write!(writer, "\x02")?;
 
-    //         write!(writer, "\x02")?;
+        write!(writer, "QF{}*\n", self.f.len())?;
+        //         if let Some(ref dev_name_str) = self.dev_name_str {
+        //             write!(writer, "N DEVICE {}*\n", dev_name_str)?;
+        //         }
+        write!(writer, "\n")?;
 
-    //         write!(writer, "QF{}*\n", self.f.len())?;
-    //         if let Some(ref dev_name_str) = self.dev_name_str {
-    //             write!(writer, "N DEVICE {}*\n", dev_name_str)?;
-    //         }
-    //         write!(writer, "\n")?;
+        let mut next_written_fuse = 0;
+        for linebreak in linebreaks {
+            // Write one line
+            if next_written_fuse == linebreak {
+                // One or more duplicate breaks.
+                write!(writer, "\n")?;
+            } else {
+                write!(writer, "L{:06} ", next_written_fuse)?;
+                for i in next_written_fuse..linebreak {
+                    write!(writer, "{}", if self.f[i] { "1" } else { "0" })?;
+                }
+                write!(writer, "*\n")?;
+                next_written_fuse = linebreak;
+            }
+        }
 
-    //         let mut next_written_fuse = 0;
-    //         for linebreak in linebreaks {
-    //             // Write one line
-    //             if next_written_fuse == linebreak {
-    //                 // One or more duplicate breaks.
-    //                 write!(writer, "\n")?;
-    //             } else {
-    //                 write!(writer, "L{:06} ", next_written_fuse)?;
-    //                 for i in next_written_fuse..linebreak {
-    //                     write!(writer, "{}", if self.f[i] {"1"} else {"0"})?;
-    //                 }
-    //                 write!(writer, "*\n")?;
-    //                 next_written_fuse = linebreak;
-    //             }
-    //         }
+        // Last chunk
+        if next_written_fuse < self.f.len() {
+            write!(writer, "L{:06} ", next_written_fuse)?;
+            for i in next_written_fuse..self.f.len() {
+                write!(writer, "{}", if self.f[i] { "1" } else { "0" })?;
+            }
+            write!(writer, "*\n")?;
+        }
 
-    //         // Last chunk
-    //         if next_written_fuse < self.f.len() {
-    //             write!(writer, "L{:06} ", next_written_fuse)?;
-    //             for i in next_written_fuse..self.f.len() {
-    //                 write!(writer, "{}", if self.f[i] {"1"} else {"0"})?;
-    //             }
-    //             write!(writer, "*\n")?;
-    //         }
+        write!(writer, "\x030000\n")?;
 
-    //         write!(writer, "\x030000\n")?;
+        Ok(())
+    }
 
-    //         Ok(())
-    //     }
+    /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks
+    /// happen every `break_inverval` fuses.
+    pub fn write_with_linebreaks<W>(&self, writer: W, break_inverval: usize) -> fmt::Result
+    where
+        W: Write,
+    {
+        self.write_custom_linebreaks(writer, (0..self.f.len()).step_by(break_inverval).skip(1))
+    }
 
-    //     /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks
-    //     /// happen every `break_inverval` fuses.
-    //     pub fn write_with_linebreaks<W>(&self, writer: W, break_inverval: usize) -> Result<(), io::Error> where W: Write {
-    //         self.write_custom_linebreaks(writer, (0..self.f.len()).step_by(break_inverval).skip(1))
-    //     }
-
-    //     /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks
-    //     /// default to once every 16 fuses.
-    //     pub fn write<W>(&self, writer: W) -> Result<(), io::Error> where W: Write {
-    //         self.write_with_linebreaks(writer, 16)
-    //     }
+    /// Writes the contents to a JEDEC file. Note that a `&mut Write` can also be passed as a writer. Line breaks
+    /// default to once every 16 fuses.
+    pub fn write<W>(&self, writer: W) -> fmt::Result
+    where
+        W: Write,
+    {
+        self.write_with_linebreaks(writer, 16)
+    }
 
     /// Constructs a fuse array with the given number of fuses
     pub fn new(size: usize) -> Self {
