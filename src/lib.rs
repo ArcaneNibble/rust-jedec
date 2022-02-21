@@ -20,9 +20,8 @@ pub enum JedParserError {
     MissingSTX,
     /// No ETX byte found
     MissingETX,
-    /// An invalid UTF-8 sequence occurred
-    InvalidNonASCIICharacter(str::Utf8Error),
-    /// A field contains a character not appropriate for that field (e.g. non-hex digit in a hex field)
+    /// A field contains a character not appropriate for that field
+    /// (e.g. non-ASCII character, non-hex digit in a hex field)
     InvalidCharacter,
     /// An unexpected end of file was encountered in the file checksum
     UnexpectedEnd,
@@ -36,27 +35,11 @@ pub enum JedParserError {
     MissingQF,
     /// There was no `F` field, but not all fuses had a value specified
     MissingF,
-    /// There was a field that this program does not recognize
-    UnrecognizedField,
 }
 
 #[cfg(std)]
 impl std::error::Error for JedParserError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            &JedParserError::MissingSTX => None,
-            &JedParserError::MissingETX => None,
-            &JedParserError::InvalidUtf8(ref err) => Some(err),
-            &JedParserError::InvalidCharacter => None,
-            &JedParserError::UnexpectedEnd => None,
-            &JedParserError::BadFileChecksum => None,
-            &JedParserError::BadFuseChecksum => None,
-            &JedParserError::InvalidFuseIndex => None,
-            &JedParserError::MissingQF => None,
-            &JedParserError::MissingF => None,
-            &JedParserError::UnrecognizedField => None,
-        }
-    }
+
 }
 
 impl fmt::Display for JedParserError {
@@ -64,9 +47,6 @@ impl fmt::Display for JedParserError {
         match self {
             &JedParserError::MissingSTX => write!(f, "STX not found"),
             &JedParserError::MissingETX => write!(f, "ETX not found"),
-            &JedParserError::InvalidNonASCIICharacter(err) => {
-                write!(f, "invalid utf8 character: {}", err)
-            }
             &JedParserError::InvalidCharacter => write!(f, "invalid character in field"),
             &JedParserError::UnexpectedEnd => write!(f, "unexpected end of file"),
             &JedParserError::BadFileChecksum => write!(f, "invalid file checksum"),
@@ -74,14 +54,13 @@ impl fmt::Display for JedParserError {
             &JedParserError::InvalidFuseIndex => write!(f, "invalid fuse index value"),
             &JedParserError::MissingQF => write!(f, "missing QF field"),
             &JedParserError::MissingF => write!(f, "missing F field"),
-            &JedParserError::UnrecognizedField => write!(f, "unrecognized field"),
         }
     }
 }
 
 impl From<str::Utf8Error> for JedParserError {
-    fn from(err: str::Utf8Error) -> Self {
-        JedParserError::InvalidNonASCIICharacter(err)
+    fn from(_: str::Utf8Error) -> Self {
+        JedParserError::InvalidCharacter
     }
 }
 
@@ -202,9 +181,6 @@ impl<'a> JEDECFile<'a> {
             return Err(JedParserError::BadFileChecksum);
         }
 
-        // // Make a str object out of the body
-        // let jed_body = str::from_utf8(&in_bytes[jed_stx + 1..jed_etx])?;
-
         // slice out header/footer/body
         let header = &in_bytes[..jed_stx];
         let jed_body = &in_bytes[jed_stx + 1..jed_etx];
@@ -238,12 +214,6 @@ impl<'a> JEDECFile<'a> {
 
             // Now we can look at the first byte to figure out what we have
             match l[0] {
-                b'J' => {}                                                  // TODO: "Official" device type
-                b'G' => {}                                                  // TODO: Security fuse
-                b'B' | b'I' | b'K' | b'M' | b'O' | b'W' | b'Y' | b'Z' => {} // Explicitly reserved in spec, ignore
-                b'D' => {}                                                  // Obsolete
-                b'E' | b'U' => {} // TODO: Extra fuses, unsupported for now
-                b'X' | b'V' | b'P' | b'S' | b'R' | b'T' | b'A' => {} // Testing-related, no intent to support for now
                 b'F' => {
                     // Default state
                     let default_state_str = trim_slice(&l[1..]);
@@ -328,7 +298,9 @@ impl<'a> JEDECFile<'a> {
                     let csum_str = str::from_utf8(csum_str)?;
                     fuse_expected_csum = Some(u16::from_str_radix(csum_str, 16)?);
                 }
-                _ => return Err(JedParserError::UnrecognizedField),
+                _ => {
+                    // ignore unsupported fields
+                }
             }
         }
 
