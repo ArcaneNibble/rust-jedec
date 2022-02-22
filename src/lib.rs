@@ -9,10 +9,12 @@ use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
-use core::fmt::Write;
 use core::num;
 use core::num::Wrapping;
 use core::str;
+
+#[cfg(feature = "std")]
+extern crate std;
 
 /// Errors that can occur when parsing a .jed file
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -38,7 +40,7 @@ pub enum JedParserError {
     MissingF,
 }
 
-#[cfg(std)]
+#[cfg(feature = "std")]
 impl std::error::Error for JedParserError {}
 
 impl fmt::Display for JedParserError {
@@ -382,14 +384,14 @@ impl<'a> JEDECFile<'a> {
 
     /// Writes the contents to a JEDEC file. Linebreaks will be inserted at
     /// the fuse indices returned by the `linebreaks` iterator.
-    pub fn write_custom_linebreaks<W, I>(
+    pub fn write_fmt_custom_linebreaks<W, I>(
         &self,
         mut writer: W,
         quirks: &Quirks,
         linebreaks: I,
     ) -> fmt::Result
     where
-        W: Write,
+        W: fmt::Write,
         I: Iterator<Item = usize>,
     {
         // FIXME: The number of 0s in the fuse index isn't minimal because of linebreaks
@@ -460,16 +462,16 @@ impl<'a> JEDECFile<'a> {
 
     /// Writes the contents to a JEDEC file. Fuses will be broken up into
     /// lines of `break_interval` fuses each.
-    pub fn write_with_linebreaks<W>(
+    pub fn write_fmt_with_linebreaks<W>(
         &self,
         writer: W,
         quirks: &Quirks,
         break_inverval: usize,
     ) -> fmt::Result
     where
-        W: Write,
+        W: fmt::Write,
     {
-        self.write_custom_linebreaks(
+        self.write_fmt_custom_linebreaks(
             writer,
             quirks,
             (0..self.f.len()).step_by(break_inverval).skip(1),
@@ -478,11 +480,122 @@ impl<'a> JEDECFile<'a> {
 
     /// Writes the contents to a JEDEC file. Fuses will be broken up into
     /// lines of 16 fuses each.
-    pub fn write<W>(&self, writer: W, quirks: &Quirks) -> fmt::Result
+    pub fn write_fmt<W>(&self, writer: W, quirks: &Quirks) -> fmt::Result
     where
-        W: Write,
+        W: fmt::Write,
     {
-        self.write_with_linebreaks(writer, quirks, 16)
+        self.write_fmt_with_linebreaks(writer, quirks, 16)
+    }
+
+    // FIXME: code duplication
+    /// Writes the contents to a JEDEC file. Linebreaks will be inserted at
+    /// the fuse indices returned by the `linebreaks` iterator.
+    #[cfg(feature = "std")]
+    pub fn write_io_custom_linebreaks<W, I>(
+        &self,
+        mut writer: W,
+        quirks: &Quirks,
+        linebreaks: I,
+    ) -> std::io::Result<()>
+    where
+        W: std::io::Write,
+        I: Iterator<Item = usize>,
+    {
+        // FIXME: The number of 0s in the fuse index isn't minimal because of linebreaks
+
+        writer.write(&self.header)?;
+        write!(writer, "\x02")?;
+
+        if !quirks.no_design_spec {
+            writer.write(&self.design_spec)?;
+            write!(writer, "*\n")?;
+        }
+
+        if let Some(secure_fuse) = self.secure_fuse {
+            write!(writer, "G{}*\n", if secure_fuse { "1" } else { "0" })?;
+        }
+        write!(writer, "QF{}*\n", self.f.len())?;
+        write!(writer, "\n")?;
+
+        for note in &self.notes {
+            write!(writer, "N")?;
+            writer.write(note)?;
+            write!(writer, "*\n")?;
+        }
+        if self.notes.len() > 0 {
+            write!(writer, "\n")?;
+        }
+
+        let fuse_idx_width = width_calc(self.f.len());
+
+        let mut next_written_fuse = 0;
+        for linebreak in linebreaks {
+            // Write one line
+            if next_written_fuse == linebreak {
+                // One or more duplicate breaks.
+                write!(writer, "\n")?;
+            } else {
+                write!(
+                    writer,
+                    "L{:0width$} ",
+                    next_written_fuse,
+                    width = fuse_idx_width
+                )?;
+                for i in next_written_fuse..linebreak {
+                    write!(writer, "{}", if self.f[i] { "1" } else { "0" })?;
+                }
+                write!(writer, "*\n")?;
+                next_written_fuse = linebreak;
+            }
+        }
+
+        // Last chunk
+        if next_written_fuse < self.f.len() {
+            write!(
+                writer,
+                "L{:0width$} ",
+                next_written_fuse,
+                width = fuse_idx_width
+            )?;
+            for i in next_written_fuse..self.f.len() {
+                write!(writer, "{}", if self.f[i] { "1" } else { "0" })?;
+            }
+            write!(writer, "*\n")?;
+        }
+
+        write!(writer, "\x030000\n")?;
+        writer.write(&self.footer)?;
+
+        Ok(())
+    }
+
+    /// Writes the contents to a JEDEC file. Fuses will be broken up into
+    /// lines of `break_interval` fuses each.
+    #[cfg(feature = "std")]
+    pub fn write_io_with_linebreaks<W>(
+        &self,
+        writer: W,
+        quirks: &Quirks,
+        break_inverval: usize,
+    ) -> std::io::Result<()>
+    where
+        W: std::io::Write,
+    {
+        self.write_io_custom_linebreaks(
+            writer,
+            quirks,
+            (0..self.f.len()).step_by(break_inverval).skip(1),
+        )
+    }
+
+    /// Writes the contents to a JEDEC file. Fuses will be broken up into
+    /// lines of 16 fuses each.
+    #[cfg(feature = "std")]
+    pub fn write_io<W>(&self, writer: W, quirks: &Quirks) -> std::io::Result<()>
+    where
+        W: std::io::Write,
+    {
+        self.write_io_with_linebreaks(writer, quirks, 16)
     }
 
     /// Constructs a fuse array with the given number of fuses
@@ -653,7 +766,7 @@ mod tests {
         let x = JEDECFile::new(0);
 
         let mut out = String::new();
-        x.write(&mut out, &Quirks::new()).unwrap();
+        x.write_fmt(&mut out, &Quirks::new()).unwrap();
 
         assert_eq!(
             out,
@@ -672,7 +785,7 @@ QF0*
         x.f.set(8, true);
 
         let mut out = String::new();
-        x.write(&mut out, &Quirks::new()).unwrap();
+        x.write_fmt(&mut out, &Quirks::new()).unwrap();
 
         assert_eq!(
             out,
@@ -692,7 +805,7 @@ L0 010000001*
         x.f.set(8, true);
 
         let mut out = String::new();
-        x.write_with_linebreaks(&mut out, &Quirks::new(), 4)
+        x.write_fmt_with_linebreaks(&mut out, &Quirks::new(), 4)
             .unwrap();
 
         assert_eq!(
@@ -715,7 +828,7 @@ L8 1*
         x.f.set(8, true);
 
         let mut out = String::new();
-        x.write_with_linebreaks(&mut out, &Quirks::new(), 3)
+        x.write_fmt_with_linebreaks(&mut out, &Quirks::new(), 3)
             .unwrap();
 
         assert_eq!(
@@ -743,7 +856,7 @@ L6 001*
         ];
 
         let mut out = String::new();
-        x.write(&mut out, &Quirks::new()).unwrap();
+        x.write_fmt(&mut out, &Quirks::new()).unwrap();
 
         assert_eq!(
             out,
@@ -767,13 +880,48 @@ this is a footer"
 
         // make sure the quirk works
         let mut out = String::new();
-        x.write(&mut out, &Quirks::new().no_design_spec(true))
+        x.write_fmt(&mut out, &Quirks::new().no_design_spec(true))
             .unwrap();
 
         assert_eq!(
             out,
             "this is a header
 \x02QF100*
+
+Nlolol note 1*
+Nlolol note 2*
+
+L000 0000000000000000*
+L016 0000000000000000*
+L032 0000000000000000*
+L048 0000000000000000*
+L064 0000000000000000*
+L080 0000000000000000*
+L096 0000*
+\x030000
+this is a footer"
+        );
+    }
+
+    #[test]
+    fn write_io_nonutf8() {
+        let mut x = JEDECFile::new(100);
+        x.header = Cow::Borrowed(b"this\xFF is a header\n");
+        x.footer = Cow::Borrowed(b"this is a footer");
+        x.design_spec = Cow::Borrowed(b"this design is for a blah blah blah device");
+        x.notes = vec![
+            Cow::Borrowed(b"lolol note 1"),
+            Cow::Borrowed(b"lolol note 2"),
+        ];
+
+        let mut out: Vec<u8> = Vec::new();
+        x.write_io(&mut out, &Quirks::new()).unwrap();
+
+        assert_eq!(
+            out,
+            b"this\xFF is a header
+\x02this design is for a blah blah blah device*
+QF100*
 
 Nlolol note 1*
 Nlolol note 2*
