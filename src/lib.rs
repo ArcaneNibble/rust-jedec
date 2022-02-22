@@ -380,7 +380,8 @@ impl<'a> JEDECFile<'a> {
         })
     }
 
-    /// Writes the contents to a JEDEC file
+    /// Writes the contents to a JEDEC file. Linebreaks will be inserted at
+    /// the fuse indices returned by the `linebreaks` iterator.
     pub fn write_custom_linebreaks<W, I>(
         &self,
         mut writer: W,
@@ -457,7 +458,8 @@ impl<'a> JEDECFile<'a> {
         Ok(())
     }
 
-    /// Writes the contents to a JEDEC file
+    /// Writes the contents to a JEDEC file. Fuses will be broken up into
+    /// lines of `break_interval` fuses each.
     pub fn write_with_linebreaks<W>(
         &self,
         writer: W,
@@ -474,7 +476,8 @@ impl<'a> JEDECFile<'a> {
         )
     }
 
-    /// Writes the contents to a JEDEC file
+    /// Writes the contents to a JEDEC file. Fuses will be broken up into
+    /// lines of 16 fuses each.
     pub fn write<W>(&self, writer: W, quirks: &Quirks) -> fmt::Result
     where
         W: Write,
