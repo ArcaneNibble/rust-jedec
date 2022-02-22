@@ -5,6 +5,7 @@ extern crate alloc;
 
 use bitvec::prelude::*;
 
+use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
@@ -105,13 +106,13 @@ pub struct JEDECFile<'a> {
     /// Fuse array
     pub f: BitVec,
     /// Data that appears before the STX byte
-    pub header: &'a [u8],
+    pub header: Cow<'a, [u8]>,
     /// Data that appears after the ETX byte
-    pub footer: &'a [u8],
+    pub footer: Cow<'a, [u8]>,
     /// Design specification field
-    pub design_spec: &'a [u8],
+    pub design_spec: Cow<'a, [u8]>,
     /// Parsed N (Note) commands
-    pub notes: Vec<&'a [u8]>,
+    pub notes: Vec<Cow<'a, [u8]>>,
     /// Security `G` fuse
     pub secure_fuse: Option<bool>,
 }
@@ -237,7 +238,7 @@ impl<'a> JEDECFile<'a> {
                 }
                 b'N' => {
                     // Notes
-                    notes.push(&l[1..]);
+                    notes.push(Cow::Borrowed(&l[1..]));
                 }
                 b'Q' => {
                     // Look for QF
@@ -343,9 +344,9 @@ impl<'a> JEDECFile<'a> {
 
         Ok(Self {
             f: fuses,
-            header,
-            footer,
-            design_spec,
+            header: Cow::Borrowed(header),
+            footer: Cow::Borrowed(footer),
+            design_spec: Cow::Borrowed(design_spec),
             notes,
             secure_fuse,
         })
@@ -416,12 +417,19 @@ impl<'a> JEDECFile<'a> {
         self.write_with_linebreaks(writer, 16)
     }
 
-    // /// Constructs a fuse array with the given number of fuses
-    // pub fn new(size: usize) -> Self {
-    //     let f = BitVec::repeat(false, size);
+    /// Constructs a fuse array with the given number of fuses
+    pub fn new(size: usize) -> Self {
+        let f = BitVec::repeat(false, size);
 
-    //     Self { f, notes: vec![] }
-    // }
+        Self {
+            f,
+            header: vec![].into(),
+            footer: vec![].into(),
+            design_spec: vec![].into(),
+            notes: vec![],
+            secure_fuse: None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -484,8 +492,8 @@ mod tests {
         let ret =
             JEDECFile::from_bytes(b"asdf\nfdsa\x02\x030000zzzzzz", &ParseQuirks::new()).unwrap();
 
-        assert_eq!(ret.header, b"asdf\nfdsa");
-        assert_eq!(ret.footer, b"zzzzzz");
+        assert_eq!(ret.header, b"asdf\nfdsa".as_slice());
+        assert_eq!(ret.footer, b"zzzzzz".as_slice());
     }
 
     #[test]
@@ -493,7 +501,7 @@ mod tests {
         let ret =
             JEDECFile::from_bytes(b"\x02hello world!\n*\x030000", &ParseQuirks::new()).unwrap();
 
-        assert_eq!(ret.design_spec, b"hello world!\n");
+        assert_eq!(ret.design_spec, b"hello world!\n".as_slice());
     }
 
     #[test]
