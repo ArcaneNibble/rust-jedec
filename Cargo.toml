@@ -12,15 +12,10 @@ edition = "2021"
 [profile.release]
 lto = true
 
-[lib]
-name = "jedec"
-crate-type = ["rlib"]
-
 [features]
-std = []
+alloc = ["bitvec/alloc"]
+std = ["alloc"]
 default = ["std"]
 
-[dependencies.bitvec]
-version = "1"
-default-features = false
-features = ["alloc"]
+[dependencies]
+bitvec = { version = "1", default-features = false }
