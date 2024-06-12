@@ -154,6 +154,57 @@ const fn width_calc(len: usize) -> usize {
     }
 }
 
+enum MyWriter<'a> {
+    Fmt(&'a mut dyn fmt::Write),
+    #[cfg(feature = "std")]
+    Io(&'a mut dyn std::io::Write),
+}
+impl<'a> MyWriter<'a> {
+    fn write_fmt(&mut self, fmt: fmt::Arguments<'_>) -> Result<(), MyWriterError> {
+        match self {
+            MyWriter::Fmt(w) => w.write_fmt(fmt).map_err(|e| MyWriterError::Fmt(e)),
+            #[cfg(feature = "std")]
+            MyWriter::Io(w) => w.write_fmt(fmt).map_err(|e| MyWriterError::Io(e)),
+        }
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), MyWriterError> {
+        match self {
+            // FIXME: handing of writing non-utf8
+            MyWriter::Fmt(w) => w
+                .write_str(str::from_utf8(bytes).unwrap())
+                .map_err(|e| MyWriterError::Fmt(e)),
+            #[cfg(feature = "std")]
+            MyWriter::Io(w) => w.write(bytes).map(|_| ()).map_err(|e| MyWriterError::Io(e)),
+        }
+    }
+}
+enum MyWriterError {
+    Fmt(fmt::Error),
+    #[cfg(feature = "std")]
+    Io(std::io::Error),
+}
+impl From<MyWriterError> for fmt::Error {
+    fn from(value: MyWriterError) -> Self {
+        #[allow(irrefutable_let_patterns)]
+        if let MyWriterError::Fmt(e) = value {
+            e
+        } else {
+            unreachable!()
+        }
+    }
+}
+#[cfg(feature = "std")]
+impl From<MyWriterError> for std::io::Error {
+    fn from(value: MyWriterError) -> Self {
+        if let MyWriterError::Io(e) = value {
+            e
+        } else {
+            unreachable!()
+        }
+    }
+}
+
 impl<'a> JEDECFile<'a> {
     /// Reads a .jed file
     pub fn from_bytes(in_bytes: &'a [u8], quirks: &Quirks) -> Result<Self, JedParserError> {
@@ -357,26 +408,20 @@ impl<'a> JEDECFile<'a> {
         })
     }
 
-    /// Writes the contents to a JEDEC file. Linebreaks will be inserted at
-    /// the fuse indices returned by the `linebreaks` iterator.
-    pub fn write_fmt_custom_linebreaks<W, I>(
+    fn write_common<I: Iterator<Item = usize>>(
         &self,
-        mut writer: W,
+        mut writer: MyWriter,
         quirks: &Quirks,
         linebreaks: I,
-    ) -> fmt::Result
-    where
-        W: fmt::Write,
-        I: Iterator<Item = usize>,
-    {
+    ) -> Result<(), MyWriterError> {
         // FIXME: The number of 0s in the fuse index isn't minimal because of linebreaks
-        // FIXME: utf8 handing
 
-        write!(writer, "{}", str::from_utf8(&self.header).unwrap())?;
+        writer.write_bytes(&self.header)?;
         write!(writer, "\x02")?;
 
         if !quirks.no_design_spec {
-            write!(writer, "{}*\n", str::from_utf8(&self.design_spec).unwrap())?;
+            writer.write_bytes(&self.design_spec)?;
+            write!(writer, "*\n")?;
         }
 
         if let Some(secure_fuse) = self.secure_fuse {
@@ -386,7 +431,9 @@ impl<'a> JEDECFile<'a> {
         write!(writer, "\n")?;
 
         for note in &self.notes {
-            write!(writer, "N{}*\n", str::from_utf8(note).unwrap())?;
+            write!(writer, "N")?;
+            writer.write_bytes(note)?;
+            write!(writer, "*\n")?;
         }
         if self.notes.len() > 0 {
             write!(writer, "\n")?;
@@ -430,9 +477,25 @@ impl<'a> JEDECFile<'a> {
         }
 
         write!(writer, "\x030000\n")?;
-        write!(writer, "{}", str::from_utf8(&self.footer).unwrap())?;
+        writer.write_bytes(&self.footer)?;
 
         Ok(())
+    }
+
+    /// Writes the contents to a JEDEC file. Linebreaks will be inserted at
+    /// the fuse indices returned by the `linebreaks` iterator.
+    pub fn write_fmt_custom_linebreaks<W, I>(
+        &self,
+        mut writer: W,
+        quirks: &Quirks,
+        linebreaks: I,
+    ) -> fmt::Result
+    where
+        W: fmt::Write,
+        I: Iterator<Item = usize>,
+    {
+        self.write_common(MyWriter::Fmt(&mut writer), quirks, linebreaks)
+            .map_err(|e| e.into())
     }
 
     /// Writes the contents to a JEDEC file. Fuses will be broken up into
@@ -476,72 +539,8 @@ impl<'a> JEDECFile<'a> {
         W: std::io::Write,
         I: Iterator<Item = usize>,
     {
-        // FIXME: The number of 0s in the fuse index isn't minimal because of linebreaks
-
-        writer.write(&self.header)?;
-        write!(writer, "\x02")?;
-
-        if !quirks.no_design_spec {
-            writer.write(&self.design_spec)?;
-            write!(writer, "*\n")?;
-        }
-
-        if let Some(secure_fuse) = self.secure_fuse {
-            write!(writer, "G{}*\n", if secure_fuse { "1" } else { "0" })?;
-        }
-        write!(writer, "QF{}*\n", self.f.len())?;
-        write!(writer, "\n")?;
-
-        for note in &self.notes {
-            write!(writer, "N")?;
-            writer.write(note)?;
-            write!(writer, "*\n")?;
-        }
-        if self.notes.len() > 0 {
-            write!(writer, "\n")?;
-        }
-
-        let fuse_idx_width = width_calc(self.f.len());
-
-        let mut next_written_fuse = 0;
-        for linebreak in linebreaks {
-            // Write one line
-            if next_written_fuse == linebreak {
-                // One or more duplicate breaks.
-                write!(writer, "\n")?;
-            } else {
-                write!(
-                    writer,
-                    "L{:0width$} ",
-                    next_written_fuse,
-                    width = fuse_idx_width
-                )?;
-                for i in next_written_fuse..linebreak {
-                    write!(writer, "{}", if self.f[i] { "1" } else { "0" })?;
-                }
-                write!(writer, "*\n")?;
-                next_written_fuse = linebreak;
-            }
-        }
-
-        // Last chunk
-        if next_written_fuse < self.f.len() {
-            write!(
-                writer,
-                "L{:0width$} ",
-                next_written_fuse,
-                width = fuse_idx_width
-            )?;
-            for i in next_written_fuse..self.f.len() {
-                write!(writer, "{}", if self.f[i] { "1" } else { "0" })?;
-            }
-            write!(writer, "*\n")?;
-        }
-
-        write!(writer, "\x030000\n")?;
-        writer.write(&self.footer)?;
-
-        Ok(())
+        self.write_common(MyWriter::Io(&mut writer), quirks, linebreaks)
+            .map_err(|e| e.into())
     }
 
     /// Writes the contents to a JEDEC file. Fuses will be broken up into
@@ -878,6 +877,7 @@ this is a footer"
         );
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn write_io_nonutf8() {
         let mut x = JEDECFile::new(100);

@@ -1,6 +1,6 @@
 [package]
 name = "jedec"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["R <rqou@berkeley.edu>"]
 license = "0BSD"
 description = "A library for working with JEDEC programming files"
