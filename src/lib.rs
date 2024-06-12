@@ -46,15 +46,15 @@ impl std::error::Error for JedParserError {}
 impl fmt::Display for JedParserError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            &JedParserError::MissingSTX => write!(f, "STX not found"),
-            &JedParserError::MissingETX => write!(f, "ETX not found"),
-            &JedParserError::InvalidCharacter => write!(f, "invalid character in field"),
-            &JedParserError::UnexpectedEnd => write!(f, "unexpected end of file"),
-            &JedParserError::BadFileChecksum => write!(f, "invalid file checksum"),
-            &JedParserError::BadFuseChecksum => write!(f, "invalid fuse checksum"),
-            &JedParserError::InvalidFuseIndex => write!(f, "invalid fuse index value"),
-            &JedParserError::MissingQF => write!(f, "missing QF field"),
-            &JedParserError::MissingF => write!(f, "missing F field"),
+            JedParserError::MissingSTX => write!(f, "STX not found"),
+            JedParserError::MissingETX => write!(f, "ETX not found"),
+            JedParserError::InvalidCharacter => write!(f, "invalid character in field"),
+            JedParserError::UnexpectedEnd => write!(f, "unexpected end of file"),
+            JedParserError::BadFileChecksum => write!(f, "invalid file checksum"),
+            JedParserError::BadFuseChecksum => write!(f, "invalid fuse checksum"),
+            JedParserError::InvalidFuseIndex => write!(f, "invalid fuse index value"),
+            JedParserError::MissingQF => write!(f, "missing QF field"),
+            JedParserError::MissingF => write!(f, "missing F field"),
         }
     }
 }
@@ -122,13 +122,10 @@ pub struct JEDECFile<'a> {
 
 fn trim_slice_start(mut in_: &[u8]) -> &[u8] {
     while in_.len() > 0 {
-        match in_[0] {
-            b' ' | b'\r' | b'\n' => {
-                in_ = &in_[1..];
-            }
-            _ => {
-                break;
-            }
+        if let b' ' | b'\r' | b'\n' = in_[0] {
+            in_ = &in_[1..];
+        } else {
+            break;
         }
     }
     in_
@@ -136,13 +133,10 @@ fn trim_slice_start(mut in_: &[u8]) -> &[u8] {
 
 fn trim_slice_end(mut in_: &[u8]) -> &[u8] {
     while in_.len() > 0 {
-        match in_[in_.len() - 1] {
-            b' ' | b'\r' | b'\n' => {
-                in_ = &in_[..in_.len() - 1];
-            }
-            _ => {
-                break;
-            }
+        if let b' ' | b'\r' | b'\n' = in_[in_.len() - 1] {
+            in_ = &in_[..in_.len() - 1];
+        } else {
+            break;
         }
     }
     in_
@@ -153,29 +147,10 @@ fn trim_slice(in_: &[u8]) -> &[u8] {
 }
 
 const fn width_calc(len: usize) -> usize {
-    // needed because no_std has no log10
-    match len {
-        0..=9 => 1,
-        10..=99 => 2,
-        100..=999 => 3,
-        1000..=9999 => 4,
-        10000..=99999 => 5,
-        100000..=999999 => 6,
-        1000000..=9999999 => 7,
-        10000000..=99999999 => 8,
-        100000000..=999999999 => 9,
-        1000000000..=9999999999 => 10,
-        10000000000..=99999999999 => 11,
-        100000000000..=999999999999 => 12,
-        1000000000000..=9999999999999 => 13,
-        10000000000000..=99999999999999 => 14,
-        100000000000000..=999999999999999 => 15,
-        1000000000000000..=9999999999999999 => 16,
-        10000000000000000..=99999999999999999 => 17,
-        100000000000000000..=999999999999999999 => 18,
-        1000000000000000000..=9999999999999999999 => 19,
-        10000000000000000000..=18446744073709551615 => 20,
-        _ => unreachable!(),
+    if len == 0 {
+        1
+    } else {
+        len.ilog10() as usize + 1
     }
 }
 
